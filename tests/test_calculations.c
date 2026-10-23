@@ -1,5 +1,9 @@
 #include <get_goals_rubi_csv.h>
 
+/**
+ * @brief Run assertions for pace conversion, smoothing, and heart-rate matching.
+ * @return 0 if all assertions pass; aborts on the first failed assertion.
+ */
 int main(void) {
     Pace pace;
     assert(validate_str_time("5:30.5", &pace) == 1);

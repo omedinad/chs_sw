@@ -16,10 +16,20 @@ typedef struct {
 	int min, sec, dec;
 } Pace;
 
+/**
+ * @brief Validate an integer heart rate in the archived implementation.
+ * @param hr Heart rate in bpm.
+ * @return hr when strictly within MIN_HR and MAX_HR, otherwise 0.
+ */
 int validate_int_HR(int hr){
 	return ((hr < MAX_HR)&&(hr > MIN_HR)?hr:0);
 }
 
+/**
+ * @brief Convert legacy heart-rate text with atoi and validate its range.
+ * @param strhr Decimal text, or NULL; trailing text is not strictly validated.
+ * @return Supported heart rate, or 0.
+ */
 int validate_str_HR(char * strhr){
 	int hr = 0;
 	if (strhr != NULL){
@@ -30,6 +40,13 @@ int validate_str_HR(char * strhr){
 	}
 }
 
+/**
+ * @brief Parse the archived minutes:seconds.fraction representation.
+ * @param tstring Input text expected to contain all three integer components.
+ * @param[out] p Destination; may be partially modified on failure.
+ * @return 1 if component checks pass, otherwise -1.
+ * @warning Archived parser does not check the sscanf conversion count.
+ */
 int validate_str_time(const char * tstring, Pace *p){
 	int min;
 	int sec;
@@ -47,6 +64,12 @@ int validate_str_time(const char * tstring, Pace *p){
 	return 1;
 }
 
+/**
+ * @brief Allocate a formatted pace string using the archived format.
+ * @param pace Pace components to format.
+ * @return Allocated string; the caller must free it.
+ * @warning This archived implementation does not handle allocation failure.
+ */
 char * pace_to_str( Pace * pace){
 	char * result;
 	result = (char *)malloc(sizeof(char)*10);
@@ -54,6 +77,14 @@ char * pace_to_str( Pace * pace){
 	return result;
 }
 
+/**
+ * @brief Search the first CSV line for an exact header name.
+ * @param field_name Column name to find.
+ * @param buffer CSV bytes containing the header.
+ * @param len Number of bytes available.
+ * @return Zero-based column index, or -1 if absent.
+ * @warning Archived code has a header-buffer overflow and leaks its temporary allocation.
+ */
 int get_field_number(const char * field_name, const char * buffer, int len){
     int llen = -1;
     char * line;
@@ -77,15 +108,36 @@ int get_field_number(const char * field_name, const char * buffer, int len){
     return -1;
 }
 
+/**
+ * @brief Split decimal minutes into whole minutes and seconds in the archived format.
+ * @param[out] pace Destination; the fractional component is left unchanged.
+ * @param fpace Pace in decimal minutes.
+ */
 void float_to_Pace(Pace * pace, float fpace){
     pace->min = (int) fpace;
     pace->sec = (int)((fpace - (float)pace->min) * (float)60);
 }
 
+/**
+ * @brief Convert archived pace components to decimal minutes, ignoring fractional seconds.
+ * @param pace Source pace.
+ * @return Whole minutes plus seconds divided by 60.
+ */
 float pace_to_float(const Pace * pace){
     return (float)pace->min + ((float)pace->sec/60);
 }
 
+/**
+ * @brief Compute legacy heart-rate and pace averages directly from CSV records.
+ * @param[out] hratp Average heart rate near the target pace.
+ * @param[out] pathr Average pace near the target heart rate.
+ * @param[in,out] bytes Writable CSV data, tokenized in place.
+ * @param len Pointer to the CSV byte count.
+ * @param target_hr Target heart rate in bpm.
+ * @param target_pace Target pace.
+ * @return -1 for missing required columns; otherwise the legacy success code.
+ * @warning Archived implementation has unsafe parsing and unguarded divisions.
+ */
 int computeValues(float * hratp, Pace * pathr, char * bytes, const size_t * len, const int * target_hr, const Pace * target_pace ){
 	
     int hratp_counter = 0;
@@ -218,6 +270,13 @@ int computeValues(float * hratp, Pace * pathr, char * bytes, const size_t * len,
 	return(1);
 }
 
+/**
+ * @brief Run the archived standalone CSV analyzer.
+ * @param argc Number of command-line arguments.
+ * @param argv Legacy positional targets and file paths.
+ * @return Legacy process exit status.
+ * @warning Historical reference only; this program is not built by the Makefile.
+ */
 int main(int argc, char **argv){
 	Pace pace;
     int target_hr;

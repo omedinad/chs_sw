@@ -3,10 +3,22 @@
 #include <get_goals_rubi_csv.h>
 #include <limits.h>
 
+/**
+ * @brief Write the command-line usage synopsis to standard error.
+ * @param name Executable name to include in the synopsis.
+ */
 static void usage(const char *name) {
     fprintf(stderr, "Usage: %s -h HR -p mm:ss.dd [-o output] [--verbose] file.csv ...\n", name);
 }
 
+/**
+ * @brief Read a nonempty text file into a newly allocated, NUL-terminated buffer.
+ * @param name Path to the input file.
+ * @param[out] bytes Buffer on success; the caller must free it. Do not use on failure.
+ * @param[out] length Byte count excluding the added NUL, valid only on success.
+ * @return 0 on success, or -1 with errno describing the failure.
+ * @note Files larger than INT_MAX and files containing embedded NUL bytes are rejected.
+ */
 static int load_file(const char *name, char **bytes, size_t *length) {
     FILE *file = fopen(name, "rb");
     if (!file) return -1;
@@ -30,12 +42,24 @@ static int load_file(const char *name, char **bytes, size_t *length) {
     return 0;
 }
 
+/**
+ * @brief Write a pace rounded to hundredths of a second to a stream.
+ * @param out Open output stream.
+ * @param minutes Pace in minutes per kilometer.
+ */
 static void print_pace(FILE *out, float minutes) {
     Pace pace;
     float_to_Pace(&pace, minutes);
     fprintf(out, "%d:%02d.%02d", pace.min, pace.sec, pace.dec);
 }
 
+/**
+ * @brief Parse options, analyze workout files, and write per-file and summary statistics.
+ * @param argc Number of command-line arguments.
+ * @param argv Argument vector containing targets, optional output settings, and CSV paths.
+ * @return 0 for successful processing or help; 1 for argument, input, or output failures.
+ * @note Failed inputs are skipped so subsequent files can still be processed.
+ */
 int main(int argc, char **argv) {
     int target_hr = 0, have_pace = 0, option;
     Pace pace = {0};

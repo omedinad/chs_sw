@@ -2,10 +2,20 @@
 #include <ctype.h>
 #include <limits.h>
 
+/**
+ * @brief Check whether a heart rate is within the supported range.
+ * @param hr Heart rate in beats per minute.
+ * @return hr if strictly between 45 and 190; otherwise 0.
+ */
 int validate_int_HR(int hr) {
     return hr > 45 && hr < 190 ? hr : 0;
 }
 
+/**
+ * @brief Parse and validate an integer heart-rate argument.
+ * @param text Null-terminated decimal text, or NULL.
+ * @return Valid heart rate in bpm, or 0 for invalid text or an unsupported value.
+ */
 int validate_str_HR(char *text) {
     char *end;
     if (!text || !*text) return 0;
@@ -15,7 +25,12 @@ int validate_str_HR(char *text) {
     return validate_int_HR((int)value);
 }
 
-/* Pace.dec is hundredths of a second. Accept one or two decimal digits. */
+/**
+ * @brief Parse a positive pace with fractional seconds.
+ * @param text Pace in mm:ss.d or mm:ss.dd format; minutes and seconds must be below 60.
+ * @param[out] pace Parsed pace; dec stores hundredths of a second. Unchanged on failure.
+ * @return 1 on success, or -1 for invalid input.
+ */
 int validate_str_time(const char *text, Pace *pace) {
     if (!text || !pace || !isdigit((unsigned char)*text)) return -1;
     char *end;
@@ -37,13 +52,25 @@ int validate_str_time(const char *text, Pace *pace) {
     return 1;
 }
 
-/* Caller owns the returned string. */
+/**
+ * @brief Allocate a pace string formatted as minutes:seconds.hundredths.
+ * @param pace Non-NULL pace to format.
+ * @return Newly allocated string, or NULL if allocation fails.
+ * @note The caller must free the returned string.
+ */
 char *pace_to_str(Pace *pace) {
     char *result = malloc(48);
     if (result) snprintf(result, 48, "%d:%02d.%02d", pace->min, pace->sec, pace->dec);
     return result;
 }
 
+/**
+ * @brief Find a column in the first CSV header line without modifying the buffer.
+ * @param name Exact, case-sensitive column name.
+ * @param bytes Buffer containing the header; a terminating NUL is not required.
+ * @param len Number of accessible bytes in the buffer.
+ * @return Zero-based column index, or -1 if absent or arguments are invalid.
+ */
 int get_field_number(const char *name, const char *bytes, int len) {
     int start = 0, column = 0;
     if (!name || !bytes || len <= 0) return -1;
@@ -59,6 +86,12 @@ int get_field_number(const char *name, const char *bytes, int len) {
     return -1;
 }
 
+/**
+ * @brief Convert decimal minutes to a pace rounded to hundredths of a second.
+ * @param[out] pace Non-NULL destination, including carry into seconds and minutes.
+ * @param minutes Pace in minutes per kilometer.
+ * @note Nonfinite, nonpositive, or out-of-range input produces a zero pace.
+ */
 void float_to_Pace(Pace *pace, float minutes) {
     *pace = (Pace){0, 0, 0};
     if (!isfinite(minutes) || minutes <= 0 || minutes > INT_MAX / 6000.0) return;
@@ -68,10 +101,20 @@ void float_to_Pace(Pace *pace, float minutes) {
     pace->dec = hundredths % 100;
 }
 
+/**
+ * @brief Convert a structured pace to decimal minutes per kilometer.
+ * @param pace Non-NULL pace with dec expressed in hundredths of a second.
+ * @return Pace in minutes per kilometer.
+ */
 float pace_to_float(const Pace *pace) {
     return pace->min + pace->sec / 60.0f + pace->dec / 6000.0f;
 }
 
+/**
+ * @brief Free every data node and reset the caller-owned sentinel.
+ * @param[in,out] head Sentinel whose nodes were dynamically allocated, or NULL.
+ * @note The sentinel itself is never freed; NULL is a no-op.
+ */
 void freeSamples(Sample *head) {
     if (!head) return;
     Sample *node = head->next;
@@ -83,6 +126,12 @@ void freeSamples(Sample *head) {
     *head = (Sample){0};
 }
 
+/**
+ * @brief Parse a finite floating-point CSV field.
+ * @param text Null-terminated numeric text; surrounding whitespace is accepted.
+ * @param[out] value Non-NULL destination; its contents are unspecified on failure.
+ * @return 0 on success, or -1 for missing, malformed, nonfinite, or out-of-range input.
+ */
 static int number(const char *text, float *value) {
     char *end;
     if (!text || !*text) return -1;
@@ -92,8 +141,18 @@ static int number(const char *text, float *value) {
     return errno || *end || !isfinite(*value) ? -1 : 0;
 }
 
-/* head is an initialized sentinel, not a data record. time is interval seconds,
- * dist is cumulative meters. Empty CSV fields retain their column positions. */
+/**
+ * @brief Parse a workout CSV into a doubly linked list of usable intervals.
+ * @param[out] count Number of usable intervals on success.
+ * @param[in,out] head Caller-owned, empty sentinel initialized to {0}.
+ * @param[in,out] bytes Writable, NUL-terminated CSV buffer; tokenized in place.
+ * @param len Non-NULL pointer to the byte count, excluding the terminating NUL.
+ * @return 0 on success, or -1 for invalid input or allocation failure.
+ * @details dist is cumulative meters, time is interval seconds, and heartrate is bpm.
+ * Stationary intervals, zero durations, and unsupported heart rates are skipped.
+ * @note On success, release allocated nodes with freeSamples(). Parse failures
+ * clear the list and count; invalid arguments return immediately. Invalid data sets errno to EINVAL.
+ */
 int loadValues(int *count, Sample *head, char *bytes, const size_t *len) {
     if (!count || !head || !bytes || !len || *len > INT_MAX) {
         errno = EINVAL;
@@ -151,6 +210,12 @@ invalid:
     return -1;
 }
 
+/**
+ * @brief Check that a smoothing kernel has odd length and normalized weights.
+ * @param window Array of finite, nonnegative weights.
+ * @param len Pointer to a positive, odd number of weights.
+ * @return 1 if the weight sum differs from one by less than 1e-6; otherwise 0.
+ */
 int validateWindow(const float *window, const int *len) {
     if (!window || !len || *len <= 0 || *len % 2 == 0) return 0;
     double sum = 0;
@@ -161,6 +226,15 @@ int validateWindow(const float *window, const int *len) {
     return fabs(sum - 1.0) < 1e-6;
 }
 
+/**
+ * @brief Smooth heart rate using a centered kernel and original sample readings.
+ * @param[in,out] head Non-NULL sentinel of the sample list.
+ * @param window Normalized kernel accepted by validateWindow().
+ * @param len Pointer to the kernel length.
+ * @return 0 on success, including lists shorter than the kernel; -1 for invalid
+ * arguments, an invalid kernel, or allocation failure.
+ * @note Edge samples without a complete window remain unchanged.
+ */
 int lowPassHR(Sample *head, const float *window, const int *len) {
     if (!head || !validateWindow(window, len)) return -1;
     size_t count = 0;
@@ -182,6 +256,14 @@ int lowPassHR(Sample *head, const float *window, const int *len) {
     return 0;
 }
 
+/**
+ * @brief Average pace for samples within an inclusive heart-rate tolerance.
+ * @param head Non-NULL sentinel of the sample list.
+ * @param target Non-NULL target heart rate in bpm.
+ * @param tolerance Allowed absolute heart-rate difference in bpm; must be nonnegative.
+ * @param[out] result Non-NULL destination for mean pace in min/km, or 0 when no samples match.
+ * @return Number of matching samples; each sample receives equal weight.
+ */
 int average_pace_at_HR(Sample *head, const int *target, int tolerance, float *result) {
     int count = 0;
     double sum = 0;
@@ -193,6 +275,14 @@ int average_pace_at_HR(Sample *head, const int *target, int tolerance, float *re
     return count;
 }
 
+/**
+ * @brief Average heart rate for samples within an inclusive relative pace tolerance.
+ * @param head Non-NULL sentinel of the sample list.
+ * @param target Non-NULL target pace.
+ * @param tolerance Nonnegative fractional tolerance; 0.01 means one percent.
+ * @param[out] result Non-NULL destination for mean heart rate in bpm, or 0 when no samples match.
+ * @return Number of matching samples; each sample receives equal weight.
+ */
 int average_hr_at_Pace(Sample *head, const Pace *target, float tolerance, float *result) {
     int count = 0;
     double sum = 0;
