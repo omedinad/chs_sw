@@ -1,6 +1,9 @@
 
 #include <chs_debug.h>
 
+#include <stdarg.h>
+#include <stdio.h>
+
 int verbose_flag = 0;
 
 /**

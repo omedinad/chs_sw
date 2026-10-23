@@ -7,7 +7,8 @@ TARGET = chs
 ODIR = obj/
 BIN_DIR = ./
 BINARY = $(BIN_DIR)$(TARGET)
-OBJ = $(addprefix $(ODIR),get_goals_rubi_csv.o chs.o chs_debug.o)
+CORE_OBJ = $(addprefix $(ODIR),heart_rate.o pace.o samples.o csv_reader.o statistics.o)
+OBJ = $(CORE_OBJ) $(addprefix $(ODIR),chs.o chs_debug.o)
 DEPS = $(wildcard include/*.h)
 
 .PHONY: all test check clean
@@ -25,8 +26,8 @@ $(BINARY): $(OBJ)
 test: $(BINARY)
 	$(BINARY) -h 145 -p 5:30.0 test.csv
 
-$(ODIR)test_calculations: tests/test_calculations.c $(ODIR)get_goals_rubi_csv.o $(ODIR)chs_debug.o $(DEPS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_calculations.c $(ODIR)get_goals_rubi_csv.o $(ODIR)chs_debug.o $(LDLIBS)
+$(ODIR)test_calculations: tests/test_calculations.c $(CORE_OBJ) $(DEPS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_calculations.c $(CORE_OBJ) $(LDLIBS)
 
 check: $(BINARY) $(ODIR)test_calculations
 	$(ODIR)test_calculations

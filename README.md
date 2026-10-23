@@ -277,7 +277,11 @@ AddressSanitizer and UndefinedBehaviorSanitizer enabled.
 | Path | Purpose |
 | --- | --- |
 | `src/chs.c` | Command-line parsing, input loading, report generation, and error handling. |
-| `src/get_goals_rubi_csv.c` | CSV parsing, sample storage, pace conversions, smoothing, and averages. |
+| `src/csv_reader.c` | CSV column lookup, numeric parsing, and workout loading. |
+| `src/heart_rate.c` | Heart-rate argument parsing and range validation. |
+| `src/pace.c` | Pace parsing, formatting, and conversion to/from decimal minutes. |
+| `src/samples.c` | Sample-list memory management. |
+| `src/statistics.c` | Heart-rate smoothing and sample averages. |
 | `src/chs_debug.c` | Optional diagnostic logging. |
 | `include/` | Shared data types and function declarations. |
 | `tests/test_calculations.c` | Assertions for conversions, smoothing, and heart-rate matching. |
@@ -285,8 +289,11 @@ AddressSanitizer and UndefinedBehaviorSanitizer enabled.
 | `test.csv` | Bundled workout for smoke testing. |
 | `Makefile` | Build, validation, and cleanup targets. |
 
-Historical parser versions remain in `src/` for reference; the Makefile compiles
-only `get_goals_rubi_csv.c`, `chs.c`, and `chs_debug.c`.
+Each module exposes its public interface through a matching header in `include/`.
+Function names use `snake_case`, with module prefixes such as `pace_parse`,
+`csv_load_samples`, `samples_free`, and `statistics_smooth_heart_rate`. Parsing
+helpers remain private to their source file. Historical parser implementations
+are preserved in Git history rather than the source tree.
 
 ## License
 

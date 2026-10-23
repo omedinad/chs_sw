@@ -1,13 +1,23 @@
+#include "csv_reader.h"
+#include "heart_rate.h"
 /* Analyze interval-based running CSV exports. */
+#include "pace.h"
+#include "samples.h"
+#include "statistics.h"
+#include <chs_debug.h>
+
+#include <errno.h>
 #include <getopt.h>
-#include <get_goals_rubi_csv.h>
 #include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /**
  * @brief Write the command-line usage synopsis to standard error.
  * @param name Executable name to include in the synopsis.
  */
-static void usage(const char *name) {
+static void print_usage(const char *name) {
     fprintf(stderr, "Usage: %s -h HR -p mm:ss.dd [-o output] [--verbose] file.csv ...\n", name);
 }
 
@@ -19,7 +29,7 @@ static void usage(const char *name) {
  * @return 0 on success, or -1 with errno describing the failure.
  * @note Files larger than INT_MAX and files containing embedded NUL bytes are rejected.
  */
-static int load_file(const char *name, char **bytes, size_t *length) {
+static int read_input_file(const char *name, char **bytes, size_t *length) {
     FILE *file = fopen(name, "rb");
     if (!file) return -1;
     long size;
@@ -49,7 +59,7 @@ static int load_file(const char *name, char **bytes, size_t *length) {
  */
 static void print_pace(FILE *out, float minutes) {
     Pace pace;
-    float_to_Pace(&pace, minutes);
+    pace_from_minutes(&pace, minutes);
     fprintf(out, "%d:%02d.%02d", pace.min, pace.sec, pace.dec);
 }
 
@@ -77,23 +87,23 @@ int main(int argc, char **argv) {
         switch (option) {
         case 0: break;
         case 'h':
-            if (!(target_hr = validate_str_HR(optarg))) { fprintf(stderr, "Invalid heart rate: %s\n", optarg); return 1; }
+            if (!(target_hr = heart_rate_parse(optarg))) { fprintf(stderr, "Invalid heart rate: %s\n", optarg); return 1; }
             break;
         case 'p':
-            if (validate_str_time(optarg, &pace) < 0) { fprintf(stderr, "Invalid pace: %s\n", optarg); return 1; }
+            if (pace_parse(optarg, &pace) < 0) { fprintf(stderr, "Invalid pace: %s\n", optarg); return 1; }
             have_pace = 1;
             break;
         case 'o': output = optarg; break;
-        case 'u': usage(argv[0]); return 0;
-        default: usage(argv[0]); return 1;
+        case 'u': print_usage(argv[0]); return 0;
+        default: print_usage(argv[0]); return 1;
         }
     }
-    if (!target_hr || !have_pace || optind == argc) { usage(argv[0]); return 1; }
+    if (!target_hr || !have_pace || optind == argc) { print_usage(argv[0]); return 1; }
     /* Read all inputs before opening output, so -o may safely name an input. */
     FILE *out = tmpfile();
     if (!out) { perror("temporary report"); return 1; }
     fprintf(out, "HR at\t\tPace at\t\tFile\n");
-    print_pace(out, pace_to_float(&pace));
+    print_pace(out, pace_to_minutes(&pace));
     fprintf(out, "\t\t%d\t\tName\n----------------------------------------------\n", target_hr);
     float window[] = {0.010333864f, 0.207561207f, 0.564209858f, 0.207561207f, 0.010333864f};
     int window_len = 5, files = 0, hr_files = 0, pace_files = 0, failed = 0;
@@ -103,18 +113,18 @@ int main(int argc, char **argv) {
         size_t length = 0;
         Sample head = {0};
         int records = 0;
-        if (load_file(argv[optind], &bytes, &length) ||
-            loadValues(&records, &head, bytes, &length) ||
-            lowPassHR(&head, window, &window_len)) {
+        if (read_input_file(argv[optind], &bytes, &length) ||
+            csv_load_samples(&records, &head, bytes, &length) ||
+            statistics_smooth_heart_rate(&head, window, &window_len)) {
             fprintf(stderr, "Cannot process %s: %s\n", argv[optind], strerror(errno));
             failed = 1;
             free(bytes);
-            freeSamples(&head);
+            samples_free(&head);
             continue;
         }
         float avg_pace, avg_hr;
-        int p_count = average_pace_at_HR(&head, &target_hr, 1, &avg_pace);
-        int h_count = average_hr_at_Pace(&head, &pace, 0.01f, &avg_hr);
+        int p_count = statistics_average_pace_at_heart_rate(&head, &target_hr, 1, &avg_pace);
+        int h_count = statistics_average_heart_rate_at_pace(&head, &pace, 0.01f, &avg_hr);
         if (h_count) { fprintf(out, "%.1f(%d)", avg_hr, h_count); hr_sum += avg_hr; hr_files++; }
         else fprintf(out, "N/A(0)");
         fprintf(out, "\t");
@@ -124,7 +134,7 @@ int main(int argc, char **argv) {
         files++;
         verbose("Processed %s: %d usable records\n", argv[optind], records);
         free(bytes);
-        freeSamples(&head);
+        samples_free(&head);
     }
     fprintf(out, "----------------------------------------------\n");
     if (hr_files) fprintf(out, "%.1f", hr_sum / hr_files); else fprintf(out, "N/A");
