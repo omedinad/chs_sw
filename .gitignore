@@ -1,1 +1,3 @@
 *.o
+/chs
+/obj/test_calculations

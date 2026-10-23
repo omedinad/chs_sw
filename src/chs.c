@@ -1,263 +1,120 @@
-/*
- *
- * Reads a CSV file, searches the first line for fields
- * called heartrate, distance and time and iterates over 
- * every row calculating the pace and hr averages for the 
- * corresponding target heartrate and target pace specified
- * using the options -h and -p.
- *
- */
-
-
+/* Analyze interval-based running CSV exports. */
 #include <getopt.h>
 #include <get_goals_rubi_csv.h>
-#include <chs_debug.h>
+#include <limits.h>
 
-void showHelp(const struct option * long_options, const char * name) {
-    fprintf(stderr, "Parameters missing, use:\n%s [options] <-h <target HR>> <-p <target pace>>  <file>\n", name);
-    for (int opt = 0;; opt++) {
-        if (long_options[opt].name != NULL) {
-            fprintf(stderr, "\t--%s", long_options[opt].name);
-            if (long_options[opt].has_arg == required_argument) {
-                fprintf(stderr, "|-%c\t\t<argument>\n", (char) long_options[opt].val);
-            } else {
-                fprintf(stderr, "\n");
-            }
-        } else break;
-    }
+static void usage(const char *name) {
+    fprintf(stderr, "Usage: %s -h HR -p mm:ss.dd [-o output] [--verbose] file.csv ...\n", name);
 }
 
-int processArguments(const int * argc,
-        char * const * argv,
-        const struct option * long_options,
-        FILE * fd_out,
-        int * target_hr1,
-        int * target_hr2,
-        Pace * t_pace1,
-        Pace * t_pace2) {
-    int c;
-    while (1) {
-
-        /* getopt_long stores the option index here. */
-        int option_index = 0;
-
-        c = getopt_long(*argc, argv, "h:p:o:",
-                long_options, &option_index);
-
-        /* Detect the end of the options. */
-        if (c == -1)
-            break;
-
-        switch (c) {
-            case 0:
-                /* If this option set a flag, do nothing else now. */
-                if (long_options[option_index].flag != 0)
-                    break;
-                printf("option %s", long_options[option_index].name);
-                if (optarg)
-                    printf(" with arg %s", optarg);
-                printf("\n");
-                break;
-
-            case 't':
-                puts("option -t\n");
-                break;
-
-            case 'h':
-                verbose("option -h has value '%s'\n", optarg);
-                if ((*target_hr1 = validate_str_HR(optarg)) == 0) {
-                    fprintf(stderr, "Bad parameter <HR>\n");
-                    return (-1);
-                }
-                break;
-
-            case 'H':
-                break;
-
-            case 'p':
-                // fprintf (stderr, "option -p with value `%s'\n", optarg);
-                if (validate_str_time(optarg, t_pace1) <= 0) {
-                    fprintf(stderr, "Bad parameter <PACE(mm:ss.ds)>\n");
-                    return (-1);
-                }
-                break;
-
-            case 'P':
-                break;
-
-            case 'o':
-
-                fd_out = fopen(optarg, "w");
-                if (fd_out == NULL) {
-                    fprintf(stderr, "Could not open %s (errno=%d)", optarg, errno);
-                } else {
-                    fprintf(stderr, "Writing output to %s\n", optarg);
-                }
-
-                break;
-
-            case '?':
-                /* getopt_long already printed an error message. */
-                break;
-
-            default:
-                abort();
-        }
+static int load_file(const char *name, char **bytes, size_t *length) {
+    FILE *file = fopen(name, "rb");
+    if (!file) return -1;
+    long size;
+    if (fseek(file, 0, SEEK_END) || (size = ftell(file)) <= 0 || size > INT_MAX ||
+        fseek(file, 0, SEEK_SET)) {
+        fclose(file);
+        errno = EINVAL;
+        return -1;
     }
-
-    if (verbose_flag)
-        puts("Verbosity is on.");
-
-    return (0);
+    *bytes = malloc((size_t)size + 1);
+    if (!*bytes) { fclose(file); return -1; }
+    *length = fread(*bytes, 1, size, file);
+    int failed = ferror(file) || *length != (size_t)size;
+    if (fclose(file)) failed = 1;
+    if (failed) { free(*bytes); *bytes = NULL; errno = EIO; return -1; }
+    (*bytes)[*length] = '\0';
+    if (memchr(*bytes, '\0', *length)) {
+        free(*bytes); *bytes = NULL; errno = EINVAL; return -1;
+    }
+    return 0;
 }
 
-size_t load_file_bytes(const char * filename, char ** file_bytes ) {
-    FILE *fd;
-    size_t file_size = 0;
-    
-    fd = fopen(filename, "r");
-
-    if (fd == NULL) {
-        fprintf(stderr, "Cannot open file: %s (errno=%i)\n", filename, errno);
-        switch (errno) {
-            case ENOENT:
-                fprintf(stderr, "File not found\n");
-                break;
-        }
-        return (-1);
-    } else {
-        fseek(fd, 0, SEEK_END);
-        file_size = ftell(fd);
-        fseek(fd, 0, SEEK_SET);
-
-        if (file_size > 0)
-            *file_bytes = (char *) malloc(sizeof (char)*file_size);
-        else {
-            fprintf(stderr, "File %s has 0 bytes\n", filename);
-        }
-    }
-
-    if (*file_bytes != NULL) {
-        file_size = fread(*file_bytes, sizeof (char), file_size, fd);
-        if (fclose(fd) != 0) {
-            fprintf(stderr, "Error closing file (errno = %d)\n", errno);
-            return -1;
-        }
-    }
-    return file_size;
-}
-
-int main(int argc, char ** argv) {
-    FILE *fd_out;
+static void print_pace(FILE *out, float minutes) {
     Pace pace;
-    Pace pace_at_hr = {0, 0, 0};
-    Pace total_pace_at_hr = {0, 0, 0};
-    char *file_bytes;
-    float hr_at_pace = 0;
-    float sum_of_hrs = 0;
-    float sum_of_paces = 0;
+    float_to_Pace(&pace, minutes);
+    fprintf(out, "%d:%02d.%02d", pace.min, pace.sec, pace.dec);
+}
 
-    int nr_of_files = 0;
-    int target_hr;
-    size_t file_size = 0;
-    int p_lines = 0;
-    int h_lines = 0;
-
-    int l_count, l_test;
-    Sample head;
-    // TODO: Add menu of Kernel generators as a parameter
-    float window[] = {0.010333864010783912, 0.20756120714779008, 0.564209857682852, 0.20756120714779008, 0.010333864010783912}; //Norm sigma = 0.5
-    int window_len = 5;
-
-    float f_pace;
-
-    static struct option long_options[] = {
-        /* These options set a flag. */
+int main(int argc, char **argv) {
+    int target_hr = 0, have_pace = 0, option;
+    Pace pace = {0};
+    const char *output = NULL;
+    static struct option options[] = {
         {"verbose", no_argument, &verbose_flag, 1},
         {"brief", no_argument, &verbose_flag, 0},
-        /* These options don't set a flag.
-         We distinguish them by their indices. */
-        {"heartrate", required_argument, 0, 'h'},
-        {"heartrate-range", required_argument, 0, 'H'},
-        {"pace", required_argument, 0, 'p'},
-        {"pace-range", required_argument, 0, 'P'},
-        {"out", required_argument, 0, 'o'},
-        {"test", required_argument, 0, 't'},
-        {0, 0, 0, 0}
+        {"heartrate", required_argument, NULL, 'h'},
+        {"pace", required_argument, NULL, 'p'},
+        {"out", required_argument, NULL, 'o'},
+        {"help", no_argument, NULL, 'u'},
+        {NULL, 0, NULL, 0}
     };
-
-    fd_out = stdout;
-
-    processArguments(&argc, argv, long_options, fd_out, &target_hr, 0, &pace, 0);
-
-    if (optind < argc) {
-        verbose("Target HR: %d\n", target_hr);
-        fprintf(stderr, "Target Pace(%s): %s\n", (validate_str_time(argv[2], &pace) > 0 ? "OK" : "NOK"), pace_to_str(&pace));
-
-        fprintf(fd_out, "HR at\t\tPace at\t\tFile\n");
-        fprintf(fd_out, "%s\t\t%d\t\tName\n", pace_to_str(&pace), target_hr);
-        fprintf(fd_out, "----------------------------------------------\n");
-
-        // "non-option ARGV-elements: "
-        while (optind < argc) {
-            nr_of_files++;
-
-            file_size = load_file_bytes(argv[optind], &file_bytes);
-            if (file_size <= 0){
-                nr_of_files--; // If we can't open a file, we skip counting it!
-                continue;
-            }
-            
-            l_count = 0;
-            l_test = loadValues(&l_count, &head, file_bytes, &file_size);
-            verbose("l_test: %d\tl_count: %d\n", l_test, l_count);
-
-            // TODO: Make this optional
-            lowPassHR(&head, window, &window_len);
-
-            // TODO: Pass tolerance as parameter or a a range from command line
-            p_lines = average_pace_at_HR(&head, &target_hr, 1, &f_pace);
-            float_to_Pace(&pace_at_hr, f_pace);
-
-            // TODO: Pass Tolerance factor as a parameter
-            h_lines = average_hr_at_Pace(&head, &pace, 0.01, &hr_at_pace);
-
-            // TODO: Review this validation... it used to be related to a parsing error...
-            if (p_lines > 0) {
-                fprintf(fd_out, "%.1f(%d)\t%s(%d)\t%s(%dK, %d Records)\n", hr_at_pace, h_lines, pace_to_str(&pace_at_hr), p_lines, argv[optind], (int) file_size / 1024, l_count);
-                sum_of_hrs += hr_at_pace;
-                sum_of_paces += f_pace;
-            } else {
-                fprintf(stderr, "Error processing file %s (errno = %d)\n", argv[optind], errno);
-                if (errno == EINVAL) {
-                    fprintf(stderr, "\tIncorrect or incompatible first line. No usable fields found.\n");
-                }
-                nr_of_files--; // If we can't open a file, we skip it!!
-            }
-
-            // TODO: Enable/Disable this line with a "Cumulative" Switch.
-            head = *((Sample *) malloc(sizeof (Sample)));
-            free(file_bytes);
-            optind++;
+    while ((option = getopt_long(argc, argv, "h:p:o:", options, NULL)) != -1) {
+        switch (option) {
+        case 0: break;
+        case 'h':
+            if (!(target_hr = validate_str_HR(optarg))) { fprintf(stderr, "Invalid heart rate: %s\n", optarg); return 1; }
+            break;
+        case 'p':
+            if (validate_str_time(optarg, &pace) < 0) { fprintf(stderr, "Invalid pace: %s\n", optarg); return 1; }
+            have_pace = 1;
+            break;
+        case 'o': output = optarg; break;
+        case 'u': usage(argv[0]); return 0;
+        default: usage(argv[0]); return 1;
         }
-
-        float_to_Pace(&total_pace_at_hr, sum_of_paces / (float) nr_of_files);
-
-        fprintf(fd_out, "----------------------------------------------\n");
-        fprintf(fd_out,
-                "%.1f\t%s\t%d files\n",
-                (sum_of_hrs / (float) nr_of_files), pace_to_str(&total_pace_at_hr), nr_of_files);
-        if (fd_out != stdout) {
-            fflush(fd_out);
-            fclose(fd_out);
-        }
-
-    } else {
-        showHelp(long_options, argv[0]);
-        return (-1);
     }
-    exit(0);
+    if (!target_hr || !have_pace || optind == argc) { usage(argv[0]); return 1; }
+    /* Read all inputs before opening output, so -o may safely name an input. */
+    FILE *out = tmpfile();
+    if (!out) { perror("temporary report"); return 1; }
+    fprintf(out, "HR at\t\tPace at\t\tFile\n");
+    print_pace(out, pace_to_float(&pace));
+    fprintf(out, "\t\t%d\t\tName\n----------------------------------------------\n", target_hr);
+    float window[] = {0.010333864f, 0.207561207f, 0.564209858f, 0.207561207f, 0.010333864f};
+    int window_len = 5, files = 0, hr_files = 0, pace_files = 0, failed = 0;
+    double hr_sum = 0, pace_sum = 0;
+    for (; optind < argc; optind++) {
+        char *bytes = NULL;
+        size_t length = 0;
+        Sample head = {0};
+        int records = 0;
+        if (load_file(argv[optind], &bytes, &length) ||
+            loadValues(&records, &head, bytes, &length) ||
+            lowPassHR(&head, window, &window_len)) {
+            fprintf(stderr, "Cannot process %s: %s\n", argv[optind], strerror(errno));
+            failed = 1;
+            free(bytes);
+            freeSamples(&head);
+            continue;
+        }
+        float avg_pace, avg_hr;
+        int p_count = average_pace_at_HR(&head, &target_hr, 1, &avg_pace);
+        int h_count = average_hr_at_Pace(&head, &pace, 0.01f, &avg_hr);
+        if (h_count) { fprintf(out, "%.1f(%d)", avg_hr, h_count); hr_sum += avg_hr; hr_files++; }
+        else fprintf(out, "N/A(0)");
+        fprintf(out, "\t");
+        if (p_count) { print_pace(out, avg_pace); pace_sum += avg_pace; pace_files++; }
+        else fprintf(out, "N/A");
+        fprintf(out, "(%d)\t%s(%zuK, %d Records)\n", p_count, argv[optind], length / 1024, records);
+        files++;
+        verbose("Processed %s: %d usable records\n", argv[optind], records);
+        free(bytes);
+        freeSamples(&head);
+    }
+    fprintf(out, "----------------------------------------------\n");
+    if (hr_files) fprintf(out, "%.1f", hr_sum / hr_files); else fprintf(out, "N/A");
+    fprintf(out, "\t");
+    if (pace_files) print_pace(out, pace_sum / pace_files); else fprintf(out, "N/A");
+    fprintf(out, "\t%d files\n", files);
+    if (ferror(out) || fflush(out) || fseek(out, 0, SEEK_SET)) { fclose(out); return 1; }
+    FILE *destination = output ? fopen(output, "w") : stdout;
+    if (!destination) { perror(output); fclose(out); return 1; }
+    int c;
+    while ((c = fgetc(out)) != EOF) if (fputc(c, destination) == EOF) { failed = 1; break; }
+    if (ferror(out)) failed = 1;
+    fclose(out);
+    if (fflush(destination)) failed = 1;
+    if (output && fclose(destination)) failed = 1;
+    return failed || !files ? 1 : 0;
 }
-
-
-

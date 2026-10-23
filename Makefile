@@ -1,36 +1,36 @@
-# http://www.cs.colby.edu/maxwell/courses/tutorials/maketutor/
+CC = gcc
+CPPFLAGS += -Iinclude
+CFLAGS ?= -O2 -g -Wall -Wextra
+LDLIBS += -lm
 
-IDIR =include/
-CC=gcc
-CFLAGS=-I$(IDIR)
+TARGET = chs
+ODIR = obj/
+BIN_DIR = ./
+BINARY = $(BIN_DIR)$(TARGET)
+OBJ = $(addprefix $(ODIR),get_goals_rubi_csv.o chs.o chs_debug.o)
+DEPS = $(wildcard include/*.h)
 
-TARGET=chs
+.PHONY: all test check clean
+all: $(BINARY)
 
-SRC_DIR=src/
+$(ODIR)%.o: src/%.c $(DEPS)
+	mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-ODIR=obj/
-BIN_DIR=./
+$(BINARY): $(OBJ)
+	mkdir -p $(dir $@)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-LIBS= -lc -lm #-lm -lnet
+# Retain the original functional sample as a quick smoke test.
+test: $(BINARY)
+	$(BINARY) -h 145 -p 5:30.0 test.csv
 
-_DEPS = get_goals_rubi_csv.h # hellomake.h
-DEPS = $(patsubst %,$(IDIR)%,$(_DEPS))
+$(ODIR)test_calculations: tests/test_calculations.c $(ODIR)get_goals_rubi_csv.o $(ODIR)chs_debug.o $(DEPS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_calculations.c $(ODIR)get_goals_rubi_csv.o $(ODIR)chs_debug.o $(LDLIBS)
 
-_OBJ =  get_goals_rubi_csv.o chs.o chs_debug.o
-OBJ = $(patsubst %,$(ODIR)%,$(_OBJ))
-
-
-$(ODIR)%.o: $(SRC_DIR)%.c $(DEPS)
-	$(CC) -c -o $@ $< $(CFLAGS)
-
-$(TARGET): $(OBJ)
-	gcc -o $(BIN_DIR)$@ $^ $(CFLAGS) $(LIBS)
-
-.PHONY: clean
-
-test:
-	$(BIN_DIR)$(TARGET) -h 145 -p 5:30.0 $(BIN_DIR)*.csv
+check: $(BINARY) $(ODIR)test_calculations
+	$(ODIR)test_calculations
+	CHS_BINARY=$(abspath $(BINARY)) python3 tests/test_chs.py
 
 clean:
-	rm -f $(ODIR)*.o *~ core $(INCDIR)*~ 
-	rm -f $(BIN_DIR)$(TARGET)
+	rm -f $(OBJ) $(BINARY) $(ODIR)test_calculations
