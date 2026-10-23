@@ -121,6 +121,16 @@ class ChsTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assertIn('145.0(2)\t5:00.00(2)', output.read_text())
 
+    ## @brief Verify all input data is read before replacing an input with its report.
+    def test_output_can_replace_input_after_analysis(self):
+        self.run_chs('-h', '145', '-p', '5:00.0', '-o', self.sample, self.sample)
+        self.assertIn('145.0(2)\t5:00.00(2)', Path(self.sample).read_text())
+
+    ## @brief Verify a buffered output-write failure is propagated to the exit status.
+    @unittest.skipUnless(Path('/dev/full').exists(), '/dev/full is not available')
+    def test_output_write_failure(self):
+        self.run_chs('-h', '145', '-p', '5:00.0', '-o', '/dev/full', self.sample, success=False)
+
     ## @brief Verify an unavailable output directory causes a failure status.
     def test_output_failure(self):
         self.run_chs('-h', '145', '-p', '5:00.0', '-o', str(self.directory / 'absent' / 'out'), self.sample, success=False)

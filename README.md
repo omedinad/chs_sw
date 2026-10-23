@@ -226,7 +226,8 @@ make clean       # Remove normal build outputs
 
 `make check` covers known-value statistics, fractional timing, smoothing,
 argument validation, multiple files, missing and malformed inputs, empty fields,
-CRLF, sensor dropouts, unavailable statistics, and report output.
+CRLF, sensor dropouts, unavailable statistics, report output, replacing an input
+with its report after analysis, and output-write failures (on systems with `/dev/full`).
 
 Override the compiler or compiler flags as needed. Force recompilation after
 changing flags because Make does not track flag changes:
@@ -276,7 +277,10 @@ AddressSanitizer and UndefinedBehaviorSanitizer enabled.
 
 | Path | Purpose |
 | --- | --- |
-| `src/chs.c` | Command-line parsing, input loading, report generation, and error handling. |
+| `src/chs.c` | Coordinates option parsing, file analysis, and report delivery. |
+| `src/cli.c` | Parses and validates CLI options, including help handling. |
+| `src/analysis.c` | Reads each file, runs the analysis, and releases its temporary resources. |
+| `src/report.c` | Formats workout rows, accumulates summaries, and publishes buffered output. |
 | `src/csv_reader.c` | CSV column lookup, numeric parsing, and workout loading. |
 | `src/heart_rate.c` | Heart-rate argument parsing and range validation. |
 | `src/pace.c` | Pace parsing, formatting, and conversion to/from decimal minutes. |

@@ -8,7 +8,7 @@ ODIR = obj/
 BIN_DIR = ./
 BINARY = $(BIN_DIR)$(TARGET)
 CORE_OBJ = $(addprefix $(ODIR),heart_rate.o pace.o samples.o csv_reader.o statistics.o)
-OBJ = $(CORE_OBJ) $(addprefix $(ODIR),chs.o chs_debug.o)
+OBJ = $(CORE_OBJ) $(addprefix $(ODIR),chs.o chs_debug.o cli.o analysis.o report.o)
 DEPS = $(wildcard include/*.h)
 
 .PHONY: all test check clean
