@@ -17,7 +17,7 @@ extern "C" {
 
     /* Flag set by ‘--verbose’. */
 
-    int verbose_flag;
+    extern int verbose_flag;
 
     void verbose(const char * format, ...);
 

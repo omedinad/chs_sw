@@ -1,327 +1,206 @@
 #include <get_goals_rubi_csv.h>
-
-#define MAX_HR 190
-#define MIN_HR 45
-#define HR_TOLERANCE 3 // Bpm
-#define PACE_TOLERANCE 10 // Seconds
-#define HDR_HR "heartrate"
-#define HDR_DIST "dist"
-#define HDR_TIME "time"
-#define CHECK_FOR_PACE_OUTLIERS 1
+#include <ctype.h>
+#include <limits.h>
 
 int validate_int_HR(int hr) {
-    return ((hr < MAX_HR)&&(hr > MIN_HR) ? hr : 0);
+    return hr > 45 && hr < 190 ? hr : 0;
 }
 
-int validate_str_HR(char * strhr) {
-    int hr = 0;
-    if (strhr != NULL) {
-        hr = atoi(strhr);
-        return validate_int_HR(hr);
-    } else {
-        return hr;
+int validate_str_HR(char *text) {
+    char *end;
+    if (!text || !*text) return 0;
+    errno = 0;
+    long value = strtol(text, &end, 10);
+    if (errno || *end || value < INT_MIN || value > INT_MAX) return 0;
+    return validate_int_HR((int)value);
+}
+
+/* Pace.dec is hundredths of a second. Accept one or two decimal digits. */
+int validate_str_time(const char *text, Pace *pace) {
+    if (!text || !pace || !isdigit((unsigned char)*text)) return -1;
+    char *end;
+    long minutes = strtol(text, &end, 10);
+    if (minutes < 0 || minutes >= 60 || *end++ != ':') return -1;
+    if (!isdigit((unsigned char)*end)) return -1;
+    char *seconds_start = end;
+    long seconds = strtol(seconds_start, &end, 10);
+    if (seconds < 0 || seconds >= 60 || *end++ != '.') return -1;
+    int decimals = 0, digits = 0;
+    while (isdigit((unsigned char)*end) && digits < 2) {
+        decimals = decimals * 10 + (*end++ - '0');
+        digits++;
     }
-}
-
-int validate_str_time(const char * tstring, Pace *p) {
-    int min;
-    int sec;
-    int dec;
-
-    sscanf(tstring, "%d:%d.%d", &min, &sec, &dec);
-
-    if (min > 0 && min < 60) p->min = min;
-    else return -1;
-    if (sec > 0 && sec < 60) p->sec = sec;
-    else return -1;
-    if (dec >= 0) p->dec = dec;
-    else return -1;
-
+    if (!digits || *end) return -1;
+    if (digits == 1) decimals *= 10;
+    if (minutes == 0 && seconds == 0 && decimals == 0) return -1;
+    *pace = (Pace){(int)minutes, (int)seconds, decimals};
     return 1;
 }
 
-char * pace_to_str(Pace * pace) {
-    char * result;
-    result = (char *) malloc(sizeof (char)*10);
-    snprintf(result, 10, "%d:%02d.%d", pace->min, pace->sec, pace->dec);
+/* Caller owns the returned string. */
+char *pace_to_str(Pace *pace) {
+    char *result = malloc(48);
+    if (result) snprintf(result, 48, "%d:%02d.%02d", pace->min, pace->sec, pace->dec);
     return result;
 }
 
-int get_field_number(const char * field_name, const char * buffer, int len) {
-    int llen = -1;
-    char * line;
-    char * token;
-    for (llen = 0; llen < len; llen++)
-        if (buffer[llen] == '\n') break;
-
-
-    line = (char *) malloc(llen);
-    memcpy(line, buffer, llen);
-    line[llen] = '\0';
-
-    for (token = strtok(line, ","), llen = 0; token; token = strtok(NULL, ","), llen++) {
-        if (strcmp(token, field_name) == 0) {
-            return llen;
+int get_field_number(const char *name, const char *bytes, int len) {
+    int start = 0, column = 0;
+    if (!name || !bytes || len <= 0) return -1;
+    for (int i = 0; i <= len; i++) {
+        if (i == len || bytes[i] == ',' || bytes[i] == '\n' || bytes[i] == '\r') {
+            if ((size_t)(i - start) == strlen(name) && !memcmp(bytes + start, name, i - start))
+                return column;
+            if (i == len || bytes[i] != ',') break;
+            column++;
+            start = i + 1;
         }
     }
-
-    //printf("%s (line lenght %d)\n", line, llen);
-
     return -1;
 }
 
-void float_to_Pace(Pace * pace, float fpace) {
-    float f_temp;
-    int i_temp;
-    pace->min = (int) fpace;
-    f_temp = ((fpace - (float) pace->min) * (float) 60);
-    i_temp = (int) f_temp;
-    pace->sec =  i_temp;
-    f_temp = (f_temp - (float)i_temp)*100;
-    pace->dec = (int)f_temp;
+void float_to_Pace(Pace *pace, float minutes) {
+    *pace = (Pace){0, 0, 0};
+    if (!isfinite(minutes) || minutes <= 0 || minutes > INT_MAX / 6000.0) return;
+    long long hundredths = llround((double)minutes * 6000);
+    pace->min = hundredths / 6000;
+    pace->sec = hundredths / 100 % 60;
+    pace->dec = hundredths % 100;
 }
 
-float pace_to_float(const Pace * pace) {
-    return (float) pace->min + ((float) pace->sec / 60) + (((float) pace->dec)/100);
+float pace_to_float(const Pace *pace) {
+    return pace->min + pace->sec / 60.0f + pace->dec / 6000.0f;
 }
 
-int loadValues(int *count, Sample * head, char * bytes, const size_t * len) {
+void freeSamples(Sample *head) {
+    if (!head) return;
+    Sample *node = head->next;
+    while (node) {
+        Sample *next = node->next;
+        free(node);
+        node = next;
+    }
+    *head = (Sample){0};
+}
 
-    int hr_f_nr, dist_f_nr, time_f_nr;
+static int number(const char *text, float *value) {
+    char *end;
+    if (!text || !*text) return -1;
+    errno = 0;
+    *value = strtof(text, &end);
+    while (isspace((unsigned char)*end)) end++;
+    return errno || *end || !isfinite(*value) ? -1 : 0;
+}
 
-    char * line_t, * field_t, * field_tr;
-    int line_nr, field_nr, hr, time;
-    float temp_dist, dist[2], dx_dist, speed, dx_pace;
-    dist[0] = 0;
-    dist[1] = 0;
-
-    Sample * current_sample, * previous_sample;
-
-    hr_f_nr = get_field_number(HDR_HR, bytes, *len);
-    // fprintf(stderr, "HR Column nr: %d\n", hr_f_nr);
-
-    dist_f_nr = get_field_number(HDR_DIST, bytes, *len);
-    // fprintf(stderr, "Distance Column nr: %d\n", dist_f_nr);
-
-    time_f_nr = get_field_number(HDR_TIME, bytes, *len);
-    // fprintf(stderr, "Time Column nr: %d\n", time_f_nr);
-
-    if (hr_f_nr >= 0 && dist_f_nr >= 0 && time_f_nr >= 0) {
-        errno = 0;
-    } else {
+/* head is an initialized sentinel, not a data record. time is interval seconds,
+ * dist is cumulative meters. Empty CSV fields retain their column positions. */
+int loadValues(int *count, Sample *head, char *bytes, const size_t *len) {
+    if (!count || !head || !bytes || !len || *len > INT_MAX) {
         errno = EINVAL;
         return -1;
     }
-
-    if (head == NULL) {
-        verbose("Allocating Head: ");
-        head = malloc(sizeof (Sample));
-        verbose("%#010x\n", head);
-    }
-
-    if (head != NULL) {
-        current_sample = head;
-        while (current_sample->next != NULL) {
-            current_sample = current_sample->next;
-            verbose("Searching for tail.\n");
+    *count = 0;
+    int hr_col = get_field_number("heartrate", bytes, (int)*len);
+    int dist_col = get_field_number("dist", bytes, (int)*len);
+    int time_col = get_field_number("time", bytes, (int)*len);
+    if (hr_col < 0 || dist_col < 0 || time_col < 0) goto invalid;
+    Sample *tail = head;
+    float previous_distance = 0;
+    char *save, *line = strtok_r(bytes, "\n", &save);
+    while (line && (line = strtok_r(NULL, "\n", &save))) {
+        float hr = 0, distance = 0, seconds = 0;
+        int found = 0, column = 0;
+        char *field = line;
+        do {
+            char *next = strchr(field, ',');
+            if (next) *next++ = '\0';
+            if (column == hr_col) { if (number(field, &hr)) goto invalid; found++; }
+            if (column == dist_col) { if (number(field, &distance)) goto invalid; found++; }
+            if (column == time_col) { if (number(field, &seconds)) goto invalid; found++; }
+            column++;
+            field = next;
+        } while (field);
+        if (found != 3 || distance < previous_distance || seconds < 0) goto invalid;
+        float delta = distance - previous_distance;
+        previous_distance = distance;
+        /* Stationary intervals and sensor dropouts do not describe running pace. */
+        if (delta <= 0 || seconds <= 0 || hr <= 45 || hr >= 190) continue;
+        Sample *node = calloc(1, sizeof(*node));
+        if (!node) { freeSamples(head); return -1; }
+        node->distance = delta;
+        node->time = seconds;
+        node->hr = hr;
+        node->speed = delta / seconds * 3.6f;
+        node->pace_min = seconds / delta * (1000.0f / 60.0f);
+        if (!isfinite(node->speed) || !isfinite(node->pace_min) ||
+            node->speed <= 0 || node->pace_min <= 0) {
+            free(node);
+            goto invalid;
         }
-    } else {
-        return -1;
+        node->prev = tail;
+        tail->next = node;
+        tail = node;
+        (*count)++;
     }
-
-    line_t = strtok(bytes, "\n");
-    for (line_t = strtok(NULL, "\n"), line_nr = 1; line_t; line_t = strtok(NULL, "\n"), line_nr++) {
-        // fprintf(stderr, "%d)\t%s\n", line_nr, line_t);
-        assert(current_sample != NULL);
-
-        for (field_t = strtok_r(line_t, ",", &field_tr), field_nr = 0; field_t; field_t = strtok_r(NULL, ",", &field_tr), field_nr++) {
-            if (field_nr == hr_f_nr) {
-                hr = validate_str_HR(field_t);
-            }
-
-            if (field_nr == dist_f_nr) {
-                temp_dist = dist[0];
-                dist[0] = atof(field_t);
-                dist[1] = temp_dist;
-            }
-
-            if (field_nr == time_f_nr) {
-                time = atoi(field_t);
-            }
-
-        }
-
-        /* General Statistics */
-
-        dx_dist = dist[0] - dist[1];
-        speed = (dx_dist != 0 ? ((dx_dist / time)*3600) / 1000 : 0); // km/h
-        dx_pace = (speed != 0 ? 60 / speed : 0);
-
-        // verbose("%d\t%.2f\t%d\t%.2f Km/h\t%.2f m/Km\n", hr, dx_dist, time, speed , dx_pace);
-
-        /* Collect Samples */
-        if (current_sample != NULL) {
-            /* Only if current Sample is allocated, we set the values... */
-            current_sample->distance = dx_dist;
-            current_sample->hr = (float) hr;
-            current_sample->pace_min = dx_pace;
-            current_sample->speed = speed;
-            current_sample->time = time;
-
-            // verbose("%.2f\t%.2f\t%d\t%.2f Km/h\t%.2f m/Km\n", current_sample->hr, current_sample->distance, current_sample->time, current_sample->speed , current_sample->pace_min);
-
-            previous_sample = current_sample;
-            current_sample->next = (Sample *) malloc(sizeof (Sample));
-            current_sample = current_sample->next;
-            current_sample->prev = previous_sample;
-
-            // verbose("p: %#010x\t c: %#010x\t n: %#010x\n", current_sample->prev, current_sample, current_sample->next);
-
-        } else {
-            verbose("Current Sample == NULL\n");
-            return -1;
-        }
-    }
-    *count = line_nr;
+    if (*count == 0) goto invalid;
     return 0;
+invalid:
+    freeSamples(head);
+    *count = 0;
+    errno = EINVAL;
+    return -1;
 }
 
-int validateWindow(const float * window, const int * len) {
-    float sum = 0;
-    for (int i = 0; i < *len; i++)
+int validateWindow(const float *window, const int *len) {
+    if (!window || !len || *len <= 0 || *len % 2 == 0) return 0;
+    double sum = 0;
+    for (int i = 0; i < *len; i++) {
+        if (!isfinite(window[i]) || window[i] < 0) return 0;
         sum += window[i];
-    return (sum == 1 ? 1 : 0);
+    }
+    return fabs(sum - 1.0) < 1e-6;
 }
 
-int lowPassHR(Sample * head, const float * window, const int * len) {
-    Sample * current_sample, *testL;
-    int half_len;
-    int left = 0, right = 0;
-    float sum;
-    verbose("Low pass start\n");
-    if (head != NULL && window != NULL) {
-        if (*len % 2 != 0) {
-            if (validateWindow(window, len) == 1) {
-                current_sample = head;
-                half_len = floor(*len / 2);
-                // Go Half way forward to have a full window.
-                for (int i = 0; i <= half_len; i++) {
-                    if (current_sample->next != NULL) {
-                        current_sample = current_sample->next;
-                    } else {
-                        verbose("Too few samples (%d so far) or too large window size of %d\n", i, *len);
-                    }
-                }
-                /* 
-                 * { 0 , 1 , 2 , 3 , 4} : len = 5: half_len: 2
-                 *   2   1   0          : left  = half_len-1 to 0
-                 *           0   1   2  : right = half_len+1 to len -1
-                 * 
-                 */
-                while (current_sample->next != NULL) {
-                    sum = 0;
-                    testL = current_sample;
-                    current_sample = current_sample->prev; // First on the left
-                    for (int p = (half_len - 1); p >= 0; p--) {
-                        sum += current_sample->hr * window[p];
-                        current_sample = current_sample->prev;
-                    }
-                    current_sample = testL->next; // First on the right
-                    for (int n = (half_len + 1); n < *len; n++) {
-                        sum += current_sample->hr * window[n];
-                        if (current_sample->next != NULL)
-                            current_sample = current_sample->next;
-                        else
-                            return 0;
-                    }
-                    sum += testL->hr * window[half_len];
-                    testL->hr = sum;
-
-                    //verbose("%.2f\t%.2f\t%d\t%.2f Km/h\t%.2f m/Km\n", current_sample->hr, current_sample->distance, current_sample->time, current_sample->speed, current_sample->pace_min);
-                    current_sample = testL->next;
-                }
-
-            } else {
-                verbose("Invalid Window, Sum(window) != 1");
-                return -1;
-            }
-        } else {
-            verbose("Window Length shall be 2k-1\n");
-            return -1;
-        }
-    } else {
-        verbose("Head == %#010x or Window == %#010x\n", head, window);
-        return -1;
+int lowPassHR(Sample *head, const float *window, const int *len) {
+    if (!head || !validateWindow(window, len)) return -1;
+    size_t count = 0;
+    for (Sample *node = head->next; node; node = node->next) count++;
+    if (count < (size_t)*len) return 0;
+    float *original = malloc(count * sizeof(*original));
+    if (!original) return -1;
+    size_t i = 0;
+    for (Sample *node = head->next; node; node = node->next) original[i++] = node->hr;
+    i = 0;
+    size_t half = *len / 2;
+    for (Sample *node = head->next; node; node = node->next, i++) {
+        if (i < half || i + half >= count) continue;
+        double sum = 0;
+        for (int j = 0; j < *len; j++) sum += original[i - half + j] * window[j];
+        node->hr = sum;
     }
+    free(original);
     return 0;
 }
 
-int average_pace_at_HR(Sample * head, const int * target_hr, int hr_tolerance, float * f_pace) {
-    Sample * current_sample;
-    int p_lines = 0;
-    float sum = 0;
-    if (head != NULL) {
-        current_sample = head;
-        while (current_sample->next != NULL) {
-            
-            if(abs(current_sample->hr - *target_hr) <= hr_tolerance){
-                // verbose("%.2f\t%.2f\t%d\t%.2f Km/h\t%.2f m/Km\n", current_sample->hr, current_sample->distance, current_sample->time, current_sample->speed, current_sample->pace_min);
-                sum += current_sample->pace_min;
-                p_lines++;
-            }
-            
-            current_sample = current_sample->next;
-        }
-        
-        *f_pace = sum/p_lines;
-        
-    } else {
-        verbose("Head == %#010x", head);
-        return -1;
+int average_pace_at_HR(Sample *head, const int *target, int tolerance, float *result) {
+    int count = 0;
+    double sum = 0;
+    *result = 0;
+    for (Sample *node = head->next; node; node = node->next) {
+        if (fabsf(node->hr - *target) <= tolerance) { sum += node->pace_min; count++; }
     }
-    return p_lines;
+    if (count) *result = sum / count;
+    return count;
 }
 
-int average_hr_at_Pace(Sample * head, const Pace * target_pace, float tolerance_factor, float * hr_at_pace){
-    Sample * current_sample;
-    Pace temp_min, temp_max;
-    const char * min_str, * max_str;
-    int h_lines = 0;
-    float min, max, center;
-    float sum = 0;
-    
-    center = pace_to_float(target_pace);
-    min =  center - (center*tolerance_factor);
-    max = center + (center*tolerance_factor);
-    
-    float_to_Pace(&temp_min, min);
-    float_to_Pace(&temp_max, max);
-    
-    min_str = pace_to_str(&temp_min);
-    max_str = pace_to_str(&temp_max);
-            
-    verbose("Searching for paces between [ %s , %s]\n", min_str , max_str);
-    
-    if (head != NULL) {
-        current_sample = head;
-        while (current_sample->next != NULL) {
-            
-            if(current_sample->pace_min < max && current_sample->pace_min > min){
-                float_to_Pace(&current_sample->pace, current_sample->pace_min);
-                // verbose("%s < %s < %s\n", min_str, pace_to_str(&current_sample->pace) , max_str );
-                sum += current_sample->hr;
-                h_lines++;
-            }
-            
-            current_sample = current_sample->next;
-        }
-        
-        *hr_at_pace = sum/h_lines;
-        
-    } else {
-        verbose("Head == %#010x", head);
-        return -1;
+int average_hr_at_Pace(Sample *head, const Pace *target, float tolerance, float *result) {
+    int count = 0;
+    double sum = 0;
+    float center = pace_to_float(target);
+    *result = 0;
+    for (Sample *node = head->next; node; node = node->next) {
+        if (fabsf(node->pace_min - center) <= center * tolerance) { sum += node->hr; count++; }
     }
-    return h_lines;
+    if (count) *result = sum / count;
+    return count;
 }
-

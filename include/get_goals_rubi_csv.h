@@ -16,7 +16,7 @@ typedef struct {
 typedef struct a_sample{
     Pace pace;
     float distance;
-    int time;
+    float time;
     float hr;
     float pace_min;
     float speed;
@@ -31,7 +31,10 @@ char * pace_to_str( Pace * );
 int get_field_number(const char * , const char * , int );
 void float_to_Pace(Pace * , float );
 float pace_to_float(const Pace * );
+/* Initialize head to {0}; it is a sentinel owned by the caller.
+ * freeSamples releases its data nodes on completion. */
 int loadValues(int *count , Sample * head, char * bytes,  const size_t * len);
+void freeSamples(Sample *head);
 int lowPassHR (Sample * head, const float * window ,const int * len);
 int validateWindow(const float * window ,const int * len);
 int average_pace_at_HR(Sample * head, const int * target_hr, int,  float * f_pace);
